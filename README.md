@@ -1,4 +1,4 @@
-# Reverse BERT
+# Reverse BERT (aka Reverse CLAP)
 
 Can you go from text embeddings back to text? That's the experiment here.
 
