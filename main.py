@@ -49,12 +49,12 @@ llama = AutoModelForCausalLM.from_pretrained(
 
 # add LoRA
 lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
+    r=128,
+    lora_alpha=256,
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
 )
 
 llama = get_peft_model(llama, lora_config)
@@ -87,7 +87,7 @@ projector = EmbeddingProjector(
     input_dim=768,
     output_dim=llama.config.hidden_size,
     num_tokens=4,  # how many "prefix" tokens the embedding becomes
-).to(DEVICE)
+).to(DEVICE, dtype=torch.float16)  # match LLM dtype
 
 # ============================================
 # DATASET
@@ -166,7 +166,7 @@ for epoch in range(EPOCHS):
     pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
     
     for step, batch in enumerate(pbar):
-        embeddings = batch["embedding"].to(DEVICE)
+        embeddings = batch["embedding"].to(DEVICE, dtype=torch.float16)  # match LLM dtype
         input_ids = batch["input_ids"].to(DEVICE)
         attention_mask = batch["attention_mask"].to(DEVICE)
         
@@ -235,7 +235,7 @@ def reconstruct_text(text, sentence_encoder, projector, llama, tokenizer, max_ne
     projector.eval()
     
     # encode
-    embedding = sentence_encoder.encode(text, convert_to_tensor=True).unsqueeze(0).to(DEVICE)
+    embedding = sentence_encoder.encode(text, convert_to_tensor=True).unsqueeze(0).to(DEVICE, dtype=torch.float16)
     
     # project
     prefix_embeds = projector(embedding)
