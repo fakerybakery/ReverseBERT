@@ -12,14 +12,14 @@ from tqdm import tqdm
 # CONFIG
 # ============================================
 
-SENTENCE_ENCODER = "all-mpnet-base-v2"  # 768 dim
-LLAMA_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
+SENTENCE_ENCODER = "Alibaba-NLP/gte-base-en-v1.5"  # 768 dim
+LLAMA_MODEL = "Qwen/Qwen3-0.6B-Base"
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 8
 EPOCHS = 3
 LR = 2e-4
-MAX_SEQ_LEN = 128
-DEVICE = "mps"
+MAX_SEQ_LEN = 512
+DEVICE = "cuda"
 
 # ============================================
 # LOAD MODELS
@@ -132,8 +132,8 @@ class TextReconstructionDataset(Dataset):
 # load some data - using a simple dataset for demo
 # you could swap this for audio captions
 print("Loading dataset...")
-dataset = load_dataset("imdb", split="train[:10000]")  # just 10k for testing
-texts = [ex["text"][:500] for ex in dataset]  # truncate long reviews
+dataset = load_dataset("mrfakename/voice-acting-inst-en")
+texts = [ex["instruction"] for ex in dataset]  # truncate long reviews
 
 train_dataset = TextReconstructionDataset(
     texts=texts,
