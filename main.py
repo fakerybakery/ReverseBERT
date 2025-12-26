@@ -223,6 +223,7 @@ for epoch in range(EPOCHS):
 
 print("Saving...")
 llama.save_pretrained("./reverse_bert_llama")
+llama.push_to_hub("ReverseBERT")
 torch.save(projector.state_dict(), "./reverse_bert_projector.pt")
 
 # ============================================
