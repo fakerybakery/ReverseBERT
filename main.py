@@ -26,7 +26,7 @@ DEVICE = "cuda"
 # ============================================
 
 print("Loading sentence encoder...")
-sentence_encoder = SentenceTransformer(SENTENCE_ENCODER, device=DEVICE)
+sentence_encoder = SentenceTransformer(SENTENCE_ENCODER, device=DEVICE, trust_remote_code=True)
 sentence_encoder.eval()
 for p in sentence_encoder.parameters():
     p.requires_grad = False
@@ -132,7 +132,7 @@ class TextReconstructionDataset(Dataset):
 # load some data - using a simple dataset for demo
 # you could swap this for audio captions
 print("Loading dataset...")
-dataset = load_dataset("mrfakename/voice-acting-inst-en")
+dataset = load_dataset("mrfakename/voice-acting-inst-en", split="train")
 texts = [ex["instruction"] for ex in dataset]  # truncate long reviews
 
 train_dataset = TextReconstructionDataset(
