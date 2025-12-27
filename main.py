@@ -14,8 +14,8 @@ from tqdm import tqdm
 
 SENTENCE_ENCODER = "Alibaba-NLP/gte-base-en-v1.5"  # 768 dim
 LLAMA_MODEL = "Qwen/Qwen3-0.6B-Base"
-BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 8
+BATCH_SIZE = 2
+GRAD_ACCUM_STEPS = 16
 EPOCHS = 3
 LR = 2e-4
 MAX_SEQ_LEN = 512
@@ -49,7 +49,7 @@ llama = AutoModelForCausalLM.from_pretrained(
 
 # add LoRA
 lora_config = LoraConfig(
-    r=128,
+    r=16,
     lora_alpha=256,
     lora_dropout=0.05,
     bias="none",
