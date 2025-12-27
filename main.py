@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from sentence_transformers import SentenceTransformer
 # from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -17,7 +18,7 @@ LLAMA_MODEL = "Qwen/Qwen3-0.6B-Base"
 BATCH_SIZE = 2
 GRAD_ACCUM_STEPS = 16
 EPOCHS = 3
-LR = 2e-4
+LR = 1e-4
 MAX_SEQ_LEN = 512
 DEVICE = "cuda"
 
@@ -50,7 +51,7 @@ llama = AutoModelForCausalLM.from_pretrained(
 # add LoRA
 lora_config = LoraConfig(
     r=16,
-    lora_alpha=256,
+    lora_alpha=32,  # typically 2x r
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
@@ -87,7 +88,7 @@ projector = EmbeddingProjector(
     input_dim=768,
     output_dim=llama.config.hidden_size,
     num_tokens=4,  # how many "prefix" tokens the embedding becomes
-).to(DEVICE, dtype=torch.float16)  # match LLM dtype
+).to(DEVICE)  # keep float32 to avoid NaN from fp16 underflow
 
 # ============================================
 # DATASET
@@ -157,6 +158,7 @@ optimizer = torch.optim.AdamW(
     list(projector.parameters()) + list(llama.parameters()),
     lr=LR,
 )
+scaler = GradScaler()
 
 llama.train()
 projector.train()
@@ -166,53 +168,64 @@ for epoch in range(EPOCHS):
     pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
     
     for step, batch in enumerate(pbar):
-        embeddings = batch["embedding"].to(DEVICE, dtype=torch.float16)  # match LLM dtype
+        embeddings = batch["embedding"].to(DEVICE)
         input_ids = batch["input_ids"].to(DEVICE)
         attention_mask = batch["attention_mask"].to(DEVICE)
         
-        # project embeddings to prefix tokens
-        prefix_embeds = projector(embeddings)  # (batch, num_tokens, hidden_dim)
+        with autocast():
+            # project embeddings to prefix tokens (autocast handles fp16)
+            prefix_embeds = projector(embeddings)  # (batch, num_tokens, hidden_dim)
+            
+            # get token embeddings for the target text
+            token_embeds = llama.get_input_embeddings()(input_ids)  # (batch, seq_len, hidden_dim)
+            
+            # concat: [prefix_embeds, token_embeds]
+            inputs_embeds = torch.cat([prefix_embeds.half(), token_embeds], dim=1)
+            
+            # extend attention mask for prefix tokens
+            prefix_mask = torch.ones(
+                embeddings.size(0), 
+                prefix_embeds.size(1),
+                device=DEVICE,
+                dtype=attention_mask.dtype,
+            )
+            full_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+            
+            # create labels: -100 for prefix (don't compute loss), then input_ids
+            prefix_labels = torch.full(
+                (embeddings.size(0), prefix_embeds.size(1)),
+                -100,
+                device=DEVICE,
+                dtype=input_ids.dtype,
+            )
+            labels = torch.cat([prefix_labels, input_ids], dim=1)
+            
+            # forward pass
+            outputs = llama(
+                inputs_embeds=inputs_embeds,
+                attention_mask=full_attention_mask,
+                labels=labels,
+            )
+            
+            loss = outputs.loss / GRAD_ACCUM_STEPS
         
-        # get token embeddings for the target text
-        token_embeds = llama.get_input_embeddings()(input_ids)  # (batch, seq_len, hidden_dim)
-        
-        # concat: [prefix_embeds, token_embeds]
-        inputs_embeds = torch.cat([prefix_embeds, token_embeds], dim=1)
-        
-        # extend attention mask for prefix tokens
-        prefix_mask = torch.ones(
-            embeddings.size(0), 
-            prefix_embeds.size(1),
-            device=DEVICE,
-            dtype=attention_mask.dtype,
-        )
-        full_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
-        
-        # create labels: -100 for prefix (don't compute loss), then input_ids
-        prefix_labels = torch.full(
-            (embeddings.size(0), prefix_embeds.size(1)),
-            -100,
-            device=DEVICE,
-            dtype=input_ids.dtype,
-        )
-        labels = torch.cat([prefix_labels, input_ids], dim=1)
-        
-        # forward pass
-        outputs = llama(
-            inputs_embeds=inputs_embeds,
-            attention_mask=full_attention_mask,
-            labels=labels,
-        )
-        
-        loss = outputs.loss / GRAD_ACCUM_STEPS
-        loss.backward()
+        scaler.scale(loss).backward()
         
         if (step + 1) % GRAD_ACCUM_STEPS == 0:
-            optimizer.step()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                list(projector.parameters()) + list(llama.parameters()), 
+                max_norm=1.0
+            )
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
         
         total_loss += loss.item() * GRAD_ACCUM_STEPS
         pbar.set_postfix({"loss": f"{loss.item() * GRAD_ACCUM_STEPS:.4f}"})
+        
+        if (step + 1) % 10 == 0:
+            print(f"Step {step+1}, Loss: {loss.item() * GRAD_ACCUM_STEPS:.4f}")
     
     avg_loss = total_loss / len(train_loader)
     print(f"Epoch {epoch+1} average loss: {avg_loss:.4f}")
@@ -223,7 +236,7 @@ for epoch in range(EPOCHS):
 
 print("Saving...")
 llama.save_pretrained("./reverse_bert_llama")
-llama.push_to_hub("ReverseBERT")
+# llama.push_to_hub("ReverseBERT")
 torch.save(projector.state_dict(), "./reverse_bert_projector.pt")
 
 # ============================================
@@ -236,28 +249,22 @@ def reconstruct_text(text, sentence_encoder, projector, llama, tokenizer, max_ne
     projector.eval()
     
     # encode
-    embedding = sentence_encoder.encode(text, convert_to_tensor=True).unsqueeze(0).to(DEVICE, dtype=torch.float16)
+    embedding = sentence_encoder.encode(text, convert_to_tensor=True).unsqueeze(0).to(DEVICE)
     
     # project
-    prefix_embeds = projector(embedding)
+    prefix_embeds = projector(embedding).to(torch.float16)
     
-    # generate
-    generated_ids = []
-    current_embeds = prefix_embeds
+    # use model.generate() for better decoding
+    outputs = llama.generate(
+        inputs_embeds=prefix_embeds,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.9,
+        pad_token_id=tokenizer.eos_token_id,
+    )
     
-    for _ in range(max_new_tokens):
-        outputs = llama(inputs_embeds=current_embeds)
-        next_token_logits = outputs.logits[:, -1, :]
-        next_token = torch.argmax(next_token_logits, dim=-1)
-        
-        if next_token.item() == tokenizer.eos_token_id:
-            break
-            
-        generated_ids.append(next_token.item())
-        next_embed = llama.get_input_embeddings()(next_token).unsqueeze(1)
-        current_embeds = torch.cat([current_embeds, next_embed], dim=1)
-    
-    return tokenizer.decode(generated_ids, skip_special_tokens=True)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 # test it
 print("\n" + "="*50)
