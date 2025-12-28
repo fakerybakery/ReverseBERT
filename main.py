@@ -133,8 +133,8 @@ class TextReconstructionDataset(Dataset):
 # load some data - using a simple dataset for demo
 # you could swap this for audio captions
 print("Loading dataset...")
-dataset = load_dataset("mrfakename/voice-acting-inst-en", split="train")
-texts = [ex["instruction"] for ex in dataset]  # truncate long reviews
+dataset = load_dataset("mrfakename/emoact_prompts", split="train")
+texts = [ex["caption"] for ex in dataset]  # truncate long reviews
 
 train_dataset = TextReconstructionDataset(
     texts=texts,
@@ -174,40 +174,40 @@ for epoch in range(EPOCHS):
         
         with autocast():
             # project embeddings to prefix tokens (autocast handles fp16)
-            prefix_embeds = projector(embeddings)  # (batch, num_tokens, hidden_dim)
-            
-            # get token embeddings for the target text
-            token_embeds = llama.get_input_embeddings()(input_ids)  # (batch, seq_len, hidden_dim)
-            
-            # concat: [prefix_embeds, token_embeds]
+        prefix_embeds = projector(embeddings)  # (batch, num_tokens, hidden_dim)
+        
+        # get token embeddings for the target text
+        token_embeds = llama.get_input_embeddings()(input_ids)  # (batch, seq_len, hidden_dim)
+        
+        # concat: [prefix_embeds, token_embeds]
             inputs_embeds = torch.cat([prefix_embeds.half(), token_embeds], dim=1)
-            
-            # extend attention mask for prefix tokens
-            prefix_mask = torch.ones(
-                embeddings.size(0), 
-                prefix_embeds.size(1),
-                device=DEVICE,
-                dtype=attention_mask.dtype,
-            )
-            full_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
-            
-            # create labels: -100 for prefix (don't compute loss), then input_ids
-            prefix_labels = torch.full(
-                (embeddings.size(0), prefix_embeds.size(1)),
-                -100,
-                device=DEVICE,
-                dtype=input_ids.dtype,
-            )
-            labels = torch.cat([prefix_labels, input_ids], dim=1)
-            
-            # forward pass
-            outputs = llama(
-                inputs_embeds=inputs_embeds,
-                attention_mask=full_attention_mask,
-                labels=labels,
-            )
-            
-            loss = outputs.loss / GRAD_ACCUM_STEPS
+        
+        # extend attention mask for prefix tokens
+        prefix_mask = torch.ones(
+            embeddings.size(0), 
+            prefix_embeds.size(1),
+            device=DEVICE,
+            dtype=attention_mask.dtype,
+        )
+        full_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+        
+        # create labels: -100 for prefix (don't compute loss), then input_ids
+        prefix_labels = torch.full(
+            (embeddings.size(0), prefix_embeds.size(1)),
+            -100,
+            device=DEVICE,
+            dtype=input_ids.dtype,
+        )
+        labels = torch.cat([prefix_labels, input_ids], dim=1)
+        
+        # forward pass
+        outputs = llama(
+            inputs_embeds=inputs_embeds,
+            attention_mask=full_attention_mask,
+            labels=labels,
+        )
+        
+        loss = outputs.loss / GRAD_ACCUM_STEPS
         
         scaler.scale(loss).backward()
         
