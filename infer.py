@@ -177,9 +177,11 @@ if __name__ == "__main__":
         test_sentences = [args.text]
     else:
         test_sentences = [
-            "A man is speaking with a deep, gravelly voice.",
-            "High pitched excited female voice with laughter.",
-            "Cookie Monster speaks in a chaotic, muppet-like way.",
+            "Young adult male, expressing contemplation and sadness, speaking in a calm, reflective tone with a steady pace and falling intonation.",
+            "Young adult male, expressing joy and excitement, speaking in an upbeat, energetic tone with a quick pace and rising intonation.",
+            "Young adult male, expressing anger and frustration, speaking in a tense, sharp tone with an uneven pace and emphatic intonation.",
+            "Young adult male, expressing fear and anxiety, speaking in a hesitant, wavering tone with a rushed pace and uncertain intonation.",
+            "Young adult male, expressing serenity and contentment, speaking in a soft, gentle tone with a slow pace and level intonation.",
         ]
     
     print("\n" + "=" * 50)
