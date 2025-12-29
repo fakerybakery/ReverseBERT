@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 import argparse
 
 # ============================================
@@ -9,7 +10,8 @@ import argparse
 # ============================================
 
 SENTENCE_ENCODER = "Alibaba-NLP/gte-base-en-v1.5"
-HF_REPO = "mrfakename/ReverseBERT-GTE-Base-EN-1.5"
+BASE_MODEL = "Qwen/Qwen3-0.6B-Base"
+LORA_REPO = "mrfakename/ReverseBERT-GTE-Base-EN-1.5"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ============================================
@@ -38,7 +40,8 @@ class EmbeddingProjector(nn.Module):
 
 def load_models(
     sentence_encoder_name=SENTENCE_ENCODER,
-    hf_repo=HF_REPO,
+    base_model=BASE_MODEL,
+    lora_repo=LORA_REPO,
     device=DEVICE,
 ):
     from huggingface_hub import hf_hub_download
@@ -47,22 +50,26 @@ def load_models(
     sentence_encoder = SentenceTransformer(sentence_encoder_name, device=device, trust_remote_code=True)
     sentence_encoder.eval()
     
-    print(f"Loading LLM from {hf_repo}...")
-    tokenizer = AutoTokenizer.from_pretrained(hf_repo)
+    print(f"Loading base model {base_model}...")
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
     
-    # Load the full model (includes LoRA merged or as adapter)
+    # Load base model
     llama = AutoModelForCausalLM.from_pretrained(
-        hf_repo,
+        base_model,
         device_map="auto",
         torch_dtype=torch.float16,
     )
+    
+    # Load LoRA adapter from HF repo
+    print(f"Loading LoRA adapter from {lora_repo}...")
+    llama = PeftModel.from_pretrained(llama, lora_repo)
     llama.eval()
     
     print("Loading projector...")
     # Download projector weights from HF repo
-    projector_path = hf_hub_download(repo_id=hf_repo, filename="reverse_bert_projector.pt")
+    projector_path = hf_hub_download(repo_id=lora_repo, filename="reverse_bert_projector.pt")
     
     projector = EmbeddingProjector(
         input_dim=768,
@@ -155,12 +162,14 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling")
     parser.add_argument("--no-sample", action="store_true", help="Use greedy decoding")
-    parser.add_argument("--repo", type=str, default=HF_REPO, help="HuggingFace repo ID")
+    parser.add_argument("--base-model", type=str, default=BASE_MODEL, help="Base LLM model")
+    parser.add_argument("--lora-repo", type=str, default=LORA_REPO, help="HuggingFace repo with LoRA weights")
     args = parser.parse_args()
     
     # Load models
     sentence_encoder, projector, llama, tokenizer = load_models(
-        hf_repo=args.repo,
+        base_model=args.base_model,
+        lora_repo=args.lora_repo,
     )
     
     # Demo texts if none provided
